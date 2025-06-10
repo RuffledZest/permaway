@@ -25,7 +25,7 @@ export default function RootLayout({
           <nav className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="container flex h-14 items-center">
               <div className="mr-4 flex">
-                <Link href="/" className="mr-6 flex items-center space-x-2">
+                <Link href="/" className="mr-6 flex items-center space-x-2 pl-4">
                   <span className="font-bold">PermaWay</span>
                 </Link>
                 <nav className="flex items-center space-x-6 text-sm font-medium">
