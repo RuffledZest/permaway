@@ -28,7 +28,17 @@ export function processMhtml(mhtmlContent: string): string {
 
 export async function processUrlContent(url: string): Promise<string> {
   try {
-    // Try fetching with CORS proxy
+    // First try the enhanced method with Puppeteer for complete rendering
+    try {
+      const enhancedHtml = await processUrlWithPuppeteer(url);
+      if (enhancedHtml) {
+        return processHtml(enhancedHtml);
+      }
+    } catch (puppeteerError) {
+      console.warn('Puppeteer method failed, falling back to CORS proxy:', puppeteerError);
+    }
+
+    // Fallback to CORS proxy method
     const corsProxies = [
       'https://api.allorigins.win/raw?url=',
       'https://cors-anywhere.herokuapp.com/',
@@ -63,5 +73,33 @@ export async function processUrlContent(url: string): Promise<string> {
     throw new Error('Failed to fetch content from all available sources');
   } catch (error) {
     throw new Error(`Failed to fetch URL content: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+async function processUrlWithPuppeteer(url: string): Promise<string> {
+  // This function will call our API endpoint that uses Puppeteer
+  try {
+    const response = await fetch('/api/process-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed with status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    if (data.success && data.html) {
+      return data.html;
+    } else {
+      throw new Error(data.error || 'Failed to process URL with Puppeteer');
+    }
+  } catch (error) {
+    console.error('Error calling Puppeteer API:', error);
+    throw error;
   }
 }

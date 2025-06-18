@@ -18,6 +18,10 @@ const nextConfig = {
     }
     return config
   },
+  // Add experimental features for better API route handling
+  experimental: {
+    serverComponentsExternalPackages: ['puppeteer']
+  }
 }
 
 export default nextConfig
