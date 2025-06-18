@@ -28,17 +28,17 @@ export function processMhtml(mhtmlContent: string): string {
 
 export async function processUrlContent(url: string): Promise<string> {
   try {
-    // First try the enhanced method with Puppeteer for complete rendering
+    // Try enhanced method with external service for complete rendering
     try {
-      const enhancedHtml = await processUrlWithPuppeteer(url);
+      const enhancedHtml = await processUrlWithExternalService(url);
       if (enhancedHtml) {
         return processHtml(enhancedHtml);
       }
-    } catch (puppeteerError) {
-      console.warn('Puppeteer method failed, falling back to CORS proxy:', puppeteerError);
+    } catch (serviceError) {
+      console.warn('External service method failed, falling back to CORS proxy:', serviceError);
     }
 
-    // Fallback to CORS proxy method
+    // Fallback to CORS proxy method with CSS extraction
     const corsProxies = [
       'https://api.allorigins.win/raw?url=',
       'https://cors-anywhere.herokuapp.com/',
@@ -55,7 +55,9 @@ export async function processUrlContent(url: string): Promise<string> {
 
         if (response.ok) {
           const html = await response.text();
-          return processHtml(html);
+          // Try to enhance the HTML by fetching external CSS
+          const enhancedHtml = await enhanceHtmlWithExternalResources(html, url);
+          return processHtml(enhancedHtml);
         }
       } catch (proxyError) {
         console.warn(`Proxy ${proxy} failed:`, proxyError);
@@ -67,7 +69,8 @@ export async function processUrlContent(url: string): Promise<string> {
     const directResponse = await fetch(url);
     if (directResponse.ok) {
       const html = await directResponse.text();
-      return processHtml(html);
+      const enhancedHtml = await enhanceHtmlWithExternalResources(html, url);
+      return processHtml(enhancedHtml);
     }
 
     throw new Error('Failed to fetch content from all available sources');
@@ -76,30 +79,148 @@ export async function processUrlContent(url: string): Promise<string> {
   }
 }
 
-async function processUrlWithPuppeteer(url: string): Promise<string> {
-  // This function will call our API endpoint that uses Puppeteer
+async function processUrlWithExternalService(url: string): Promise<string> {
+  // Use a third-party service that can render complete pages
+  const services = [
+    // HTMLCSStoImage API (free tier available)
+    `https://htmlcsstoimage.com/demo_images/screenshot?url=${encodeURIComponent(url)}&format=html`,
+    // Web scraping API services
+    `https://api.scraperapi.com?api_key=demo&url=${encodeURIComponent(url)}&render=true`,
+  ];
+
+  for (const serviceUrl of services) {
+    try {
+      const response = await fetch(serviceUrl, {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      if (response.ok) {
+        const html = await response.text();
+        if (html && html.includes('<html')) {
+          return html;
+        }
+      }
+    } catch (error) {
+      console.warn(`Service ${serviceUrl} failed:`, error);
+      continue;
+    }
+  }
+
+  throw new Error('All external services failed');
+}
+
+async function enhanceHtmlWithExternalResources(html: string, baseUrl: string): Promise<string> {
   try {
-    const response = await fetch('/api/process-url', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`API request failed with status: ${response.status}`);
-    }
-
-    const data = await response.json();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
     
-    if (data.success && data.html) {
-      return data.html;
-    } else {
-      throw new Error(data.error || 'Failed to process URL with Puppeteer');
+    // Get the base URL for resolving relative paths
+    const urlObj = new URL(baseUrl);
+    const baseUrlString = `${urlObj.protocol}//${urlObj.host}`;
+    
+    // Find all external CSS links
+    const cssLinks = doc.querySelectorAll('link[rel="stylesheet"]');
+    const cssPromises: Promise<string>[] = [];
+    
+    cssLinks.forEach((link) => {
+      const href = link.getAttribute('href');
+      if (href) {
+        let cssUrl = href;
+        
+        // Convert relative URLs to absolute
+        if (href.startsWith('/')) {
+          cssUrl = baseUrlString + href;
+        } else if (href.startsWith('./') || !href.startsWith('http')) {
+          cssUrl = new URL(href, baseUrl).toString();
+        }
+        
+        // Fetch the CSS content
+        const cssPromise = fetchCssContent(cssUrl).catch(() => '');
+        cssPromises.push(cssPromise);
+      }
+    });
+    
+    // Wait for all CSS to be fetched
+    const cssContents = await Promise.all(cssPromises);
+    
+    // Create a combined style tag
+    if (cssContents.some(css => css.length > 0)) {
+      const styleElement = doc.createElement('style');
+      styleElement.textContent = cssContents.filter(css => css.length > 0).join('\n\n');
+      
+      // Insert the style tag in the head
+      const head = doc.querySelector('head');
+      if (head) {
+        head.appendChild(styleElement);
+      }
+      
+      // Remove the original link tags
+      cssLinks.forEach(link => link.remove());
     }
+    
+    // Convert relative image URLs to absolute
+    const images = doc.querySelectorAll('img[src]');
+    images.forEach((img) => {
+      const src = img.getAttribute('src');
+      if (src && !src.startsWith('http') && !src.startsWith('data:')) {
+        let absoluteSrc = src;
+        if (src.startsWith('/')) {
+          absoluteSrc = baseUrlString + src;
+        } else {
+          absoluteSrc = new URL(src, baseUrl).toString();
+        }
+        img.setAttribute('src', absoluteSrc);
+      }
+    });
+    
+    return doc.documentElement.outerHTML;
+    
   } catch (error) {
-    console.error('Error calling Puppeteer API:', error);
-    throw error;
+    console.warn('Failed to enhance HTML with external resources:', error);
+    return html; // Return original HTML if enhancement fails
+  }
+}
+
+async function fetchCssContent(cssUrl: string): Promise<string> {
+  try {
+    // Try with CORS proxy
+    const corsProxies = [
+      'https://api.allorigins.win/raw?url=',
+      'https://corsproxy.io/?'
+    ];
+    
+    for (const proxy of corsProxies) {
+      try {
+        const response = await fetch(proxy + encodeURIComponent(cssUrl), {
+          headers: {
+            'Accept': 'text/css,*/*;q=0.1'
+          }
+        });
+        
+        if (response.ok) {
+          const css = await response.text();
+          if (css && css.trim().length > 0) {
+            return `/* Fetched from: ${cssUrl} */\n${css}`;
+          }
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    
+    // Try direct fetch as fallback
+    const directResponse = await fetch(cssUrl);
+    if (directResponse.ok) {
+      const css = await directResponse.text();
+      return `/* Fetched from: ${cssUrl} */\n${css}`;
+    }
+    
+    return '';
+  } catch (error) {
+    console.warn(`Failed to fetch CSS from ${cssUrl}:`, error);
+    return '';
   }
 }
